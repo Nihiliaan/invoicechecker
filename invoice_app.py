@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from flask import Flask, request, Response, send_from_directory, jsonify
 from openai import OpenAI
-import fitz  # PyMuPDF
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz  # PyMuPDF fallback
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 
@@ -561,43 +564,37 @@ def pdf_parse_regex(text):
         if m: date = f"{m.group(1)}{m.group(2)}{m.group(3)}"
 
     seen, amounts = set(), []
-    # 模式1：¥/￥/Y 紧跟数字（同行）
-    for m in re.finditer(r'[¥￥]\s*(-?[0-9]+\.[0-9]{2})', text):
-        val = m.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
-    for m in re.finditer(r'(?<![A-Z0-9])Y\s*(-?[0-9]+\.[0-9]{2})', text):
-        val = m.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
+    def _add_amt(s1: str, s2: str):
+        is_neg = ('-' in s1) or (s2.startswith('-'))
+        clean_num = s2.lstrip('-')
+        val_str = f'-{clean_num}' if is_neg else clean_num
+        if val_str not in seen:
+            seen.add(val_str)
+            amounts.append(float(val_str))
+
+    # 模式1：¥/￥/Y 紧跟数字（同行，支持负号在符号前或后，如 -¥100.00 或 ¥-100.00）
+    for m in re.finditer(r'(-?)\s*[¥￥]\s*(-?[0-9]+\.[0-9]{2})', text):
+        _add_amt(m.group(1), m.group(2))
+    for m in re.finditer(r'(-?)\s*(?<![A-Z0-9])Y\s*(-?[0-9]+\.[0-9]{2})', text):
+        _add_amt(m.group(1), m.group(2))
     # 模式2：数字后紧跟 ¥/￥（同行）
     for m in re.finditer(r'(-?[0-9]+\.[0-9]{2})\s*[¥￥]', text):
-        val = m.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
+        _add_amt('', m.group(1))
     # 模式3：¥/￥/Y 换行后接数字（滴滴发票等文字层分行格式）
-    for m in re.finditer(r'[¥￥]\s*\n\s*(-?[0-9]+\.[0-9]{2})', text):
-        val = m.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
+    for m in re.finditer(r'(-?)\s*[¥￥]\s*\n\s*(-?[0-9]+\.[0-9]{2})', text):
+        _add_amt(m.group(1), m.group(2))
     # 模式5：数字换行后接 ¥/￥（全电发票金额/符号倒置分行格式）
     for m in re.finditer(r'(-?[0-9]+\.[0-9]{2})\s*\n\s*[¥￥]', text):
-        val = m.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
+        _add_amt('', m.group(1))
     # 模式4：专门抓"价税合计"后的裸数字（兜底）
     m_jshj = re.search(r'价税合计[^\n]{0,30}\n\s*(-?[0-9]+\.[0-9]{2})', text)
     if not m_jshj:
-        m_jshj = re.search(r'价税合计[（(小写）\s¥￥Y\n]{0,30}(-?[0-9]+\.[0-9]{2})', text)
+        m_jshj = re.search(r'价税合计[（(小写）\s¥￥Y\n\-]{0,30}(-?[0-9]+\.[0-9]{2})', text)
     if m_jshj:
-        val = m_jshj.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
+        _add_amt('', m_jshj.group(1))
     # 模式6：裸数字行 + 下行是 (小写)¥ 或单独¥（全电发票价税合计倒置格式）
     for m in re.finditer(r'^\s*(-?[0-9]+\.[0-9]{2})\s*\n\s*(?:\(小写\)\s*)?[¥￥]', text, re.MULTILINE):
-        val = m.group(1)
-        if val not in seen:
-            seen.add(val); amounts.append(float(val))
+        _add_amt('', m.group(1))
 
     amount = 0.0
     if code:

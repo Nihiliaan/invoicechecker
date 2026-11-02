@@ -33,3 +33,6 @@ Thumbs.db
 *.swp
 
 cache/
+
+# 本地测试与分析报告
+*测试报告*.md

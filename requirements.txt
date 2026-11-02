@@ -1,15 +1,15 @@
-flask
-openai
-PyMuPDF
-playwright
-python-dotenv
-Pillow
-pandas
-openpyxl
-ddddocr
-easyofd
-tencentcloud-sdk-python
+Flask>=3.0.0,<4.0.0
+openai>=1.0.0
+PyMuPDF>=1.23.0
+playwright>=1.40.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+ddddocr>=1.4.0
+easyofd>=0.3.0
+tencentcloud-sdk-python>=3.0.0
 
-# Optional: QR code decoding (pyzbar, opencv-python-headless)
-# pyzbar
-# opencv-python-headless
+# Optional: QR code decoding acceleration
+# pyzbar>=0.1.9
+# opencv-python-headless>=4.8.0

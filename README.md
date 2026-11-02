@@ -345,6 +345,17 @@ data: {"step": "done", "status": false, "data": null}
 
 ---
 
+## 自动化测试 (Tests)
+
+本项目内置针对 SSE 数据流传输协议、发票二维码解析、日期金额规范化、红字负数发票与全电发票提取清洗的单元测试套件：
+
+```bash
+# 执行全部单元测试
+python -m unittest discover -s tests -v
+```
+
+---
+
 ## 故障排查与常见问题
 
 ### 1. 验证码调试缓存
