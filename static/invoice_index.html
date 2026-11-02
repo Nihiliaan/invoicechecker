@@ -423,16 +423,19 @@ header h1 em { font-style: italic; color: var(--text-muted); }
     border-bottom: 1px solid var(--glass-border);
     background: rgba(255,255,255,0.38);
 }
-.rc-head.ok-head  { background: var(--success-light); }
-.rc-head.err-head { background: var(--error-light); }
+.rc-head.ok-head   { background: var(--success-light); }
+.rc-head.warn-head { background: var(--warning-light); }
+.rc-head.err-head  { background: var(--error-light); }
 .rc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
-.rc-dot.ok  { background: var(--success); }
-.rc-dot.err { background: var(--error); }
+.rc-dot.ok   { background: var(--success); }
+.rc-dot.warn { background: var(--warning); }
+.rc-dot.err  { background: var(--error); }
 .rc-name { font-family: var(--mono); font-size: 0.68rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .rc-body   { padding: 12px; }
 .rc-status { font-family: var(--mono); font-size: 0.68rem; margin-bottom: 10px; }
-.rc-status.ok  { color: var(--success); }
-.rc-status.err { color: var(--error); }
+.rc-status.ok   { color: var(--success); }
+.rc-status.warn { color: var(--warning); font-weight: 600; }
+.rc-status.err  { color: var(--error); }
 .rc-img { width: 100%; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); cursor: pointer; transition: opacity 0.2s; }
 .rc-img:hover { opacity: 0.85; }
 
@@ -868,14 +871,53 @@ function vAddResultCard(containerId, label, statusId) {
 }
 
 // 把截图填入卡片
-function vFillCard(card, statusId, success, screenshotUrl, fname, errorMsg) {
+function vFillCard(card, statusId, success, dataPayload, fname, errorMsg) {
     const statusEl = document.getElementById(statusId);
     const head = card.querySelector('.rc-head');
-    if (success && screenshotUrl) {
+    const dot = head.querySelector('.rc-dot');
+
+    let vStatus = 'unknown';
+    let screenshotUrl = null;
+
+    if (typeof dataPayload === 'string') {
+        screenshotUrl = dataPayload;
+        vStatus = success ? 'valid' : 'unknown';
+    } else if (dataPayload && typeof dataPayload === 'object') {
+        vStatus = dataPayload.verification_status || (success ? 'valid' : 'unknown');
+        screenshotUrl = dataPayload.screenshot || null;
+    }
+
+    head.classList.remove('ok-head', 'warn-head', 'err-head');
+    dot.classList.remove('ok', 'warn', 'err');
+
+    if (vStatus === 'valid') {
         head.classList.add('ok-head');
-        head.querySelector('.rc-dot').classList.add('ok');
+        dot.classList.add('ok');
         statusEl.className = 'rc-status ok';
-        statusEl.textContent = '✓ 查验成功';
+        statusEl.textContent = '✓ 查验一致（真票）';
+    } else if (vStatus === 'inconsistent') {
+        head.classList.add('warn-head');
+        dot.classList.add('warn');
+        statusEl.className = 'rc-status warn';
+        statusEl.textContent = '⚠️ 查验反馈：发票信息不一致';
+    } else if (vStatus === 'not_found') {
+        head.classList.add('err-head');
+        dot.classList.add('err');
+        statusEl.className = 'rc-status err';
+        statusEl.textContent = '✕ 查验反馈：查无此票';
+    } else if (vStatus === 'over_limit') {
+        head.classList.add('warn-head');
+        dot.classList.add('warn');
+        statusEl.className = 'rc-status warn';
+        statusEl.textContent = '⚠️ 查验反馈：超出单日查验限额';
+    } else {
+        head.classList.add('err-head');
+        dot.classList.add('err');
+        statusEl.className = 'rc-status err';
+        statusEl.textContent = '✕ 查验失败' + (errorMsg ? `：${errorMsg}` : '');
+    }
+
+    if (screenshotUrl) {
         const img = document.createElement('img');
         img.className = 'rc-img';
         img.src = screenshotUrl;
@@ -888,11 +930,6 @@ function vFillCard(card, statusId, success, screenshotUrl, fname, errorMsg) {
         dlBtn.textContent = window._screenshots.length === 1
             ? '⬇ 下载截图'
             : `⬇ 下载全部截图 (${window._screenshots.length})`;
-    } else {
-        head.classList.add('err-head');
-        head.querySelector('.rc-dot').classList.add('err');
-        statusEl.className = 'rc-status err';
-        statusEl.textContent = '✕ 查验失败' + (errorMsg ? `：${errorMsg}` : '');
     }
 }
 
@@ -930,6 +967,7 @@ async function startVerification() {
             const decoder = new TextDecoder();
             let buf = '';
             let finalSuccess = false;
+            let finalData = null;
             let finalMessage = '';
 
             while (true) {
@@ -963,7 +1001,14 @@ async function startVerification() {
                                 const amt = e.data.total_amount ?? e.data.amount_ex_tax ?? '';
                                 return `✅ ${name}成功 ${no ? '— 号:' + no : ''} ${amt !== '' ? '额:' + amt : ''}`.trim();
                             }
-                            if (e.step === 'done') return '🎉 查验完成';
+                            if (e.step === 'done') {
+                                const vs = e.data?.verification_status;
+                                if (vs === 'valid') return '🎉 查验完成：发票信息一致 (真票)';
+                                if (vs === 'inconsistent') return '⚠️ 查验完成：国税反馈发票信息不一致';
+                                if (vs === 'not_found') return '❌ 查验完成：国税反馈查无此票';
+                                if (vs === 'over_limit') return '⚠️ 查验完成：超出单日查验上限';
+                                return '🎉 查验完成';
+                            }
                             return `✅ ${name}完成`;
                         } else if (e.status === false) {
                             return `❌ ${name}失败`;
@@ -987,13 +1032,24 @@ async function startVerification() {
                         const pc = pageCards[pData.page];
                         const isOk = ev.status === true;
                         if (pc) {
-                            vFillCard(pc.card, pc.statusId, isOk, pData.screenshot, pc.fname);
+                            vFillCard(pc.card, pc.statusId, isOk, pData, pc.fname);
                         }
-                        vAddLog(`📄 [${pData.label || pData.page}] ${isOk ? '✅ 查验成功' : '❌ 查验失败'}`, isOk ? 'ok' : 'err');
+                        const vs = pData.verification_status;
+                        let msg = `📄 [${pData.label || pData.page}] `;
+                        let logLvl = 'ok';
+                        if (vs === 'valid') msg += '✅ 查验一致 (真票)';
+                        else if (vs === 'inconsistent') { msg += '⚠️ 信息不一致'; logLvl = 'warn'; }
+                        else if (vs === 'not_found') { msg += '❌ 查无此票'; logLvl = 'err'; }
+                        else if (isOk) msg += '✅ 查验完成';
+                        else { msg += '❌ 查验失败'; logLvl = 'err'; }
+                        vAddLog(msg, logLvl);
                         vSetProgress(pData.page, pData.total);
                     } else if (ev.step === 'done') {
                         finalSuccess = ev.status === true;
-                        vAddLog(getStepText(ev), finalSuccess ? 'ok' : 'err');
+                        finalData = ev.data;
+                        const vs = ev.data?.verification_status;
+                        const logLvl = (finalSuccess && vs === 'valid') ? 'ok' : ((finalSuccess && (vs === 'inconsistent' || vs === 'over_limit')) ? 'warn' : 'err');
+                        vAddLog(getStepText(ev), logLvl);
 
                         if (!isMultipage) {
                             if (!singleCard) {
@@ -1011,7 +1067,10 @@ async function startVerification() {
                 }
             }
 
-            if (fiEl) fiEl.dataset.status = finalSuccess ? 'success' : 'error';
+            if (fiEl) {
+                const vs = (finalData && typeof finalData === 'object') ? finalData.verification_status : null;
+                fiEl.dataset.status = (finalSuccess && vs === 'valid') ? 'success' : 'error';
+            }
             if (isMultipage && finalMessage) {
                 vAddLog(`📊 ${f.name} — ${finalMessage}`, finalSuccess ? 'ok' : 'warn');
             }

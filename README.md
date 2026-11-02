@@ -216,11 +216,11 @@ sudo systemctl status invoicechecker
 | :--- | :--- | :--- | :--- |
 | `step` | String | 当前步骤标识（纯英文） | `"parse"`（发票解析）、`"open_browser"`（打开平台）、`"fill_form"`（填写表单）、`"captcha"`（验证码识别）、`"fetch_result"`（获取结果）、`"done"`（完成） |
 | `status` | Boolean | 步骤执行结果（仅在步骤完成或失败时返回） | 成功为 `true`，失败为 `false`。步骤进行中不包含此字段。 |
-| `data` | Object / String / null | 业务数据 | 1. 当 `step: "parse"` 且 `status: true` 时，返回发票结构化 JSON；<br>2. 当 `step: "done"` 时，成功返回截图 DataURL，失败返回 `null`；<br>3. 其他步骤不包含此字段。 |
+| `data` | Object / null | 业务数据载荷 | 1. 当 `step: "parse"` 且 `status: true` 时，返回发票结构化纯英文 JSON；<br>2. 当 `step: "done"` 时，返回包含 `verification_status`（核验结论：`valid` 一致、`inconsistent` 不一致、`not_found` 查无此票、`over_limit` 超过限额、`unknown` 异常）与 `screenshot`（截图 DataURL）的对象；<br>3. 其他步骤不包含此字段。 |
 
 ---
 
-#### 响应示例：查验成功
+#### 响应示例：查验成功 (发票信息一致)
 
 ```http
 HTTP/1.1 200 OK
@@ -248,7 +248,40 @@ data: {"step": "fetch_result"}
 
 data: {"step": "fetch_result", "status": true}
 
-data: {"step": "done", "status": true, "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABQAA..."}
+data: {"step": "done", "status": true, "data": {"verification_status": "valid", "screenshot": "data:image/png;base64,iVBORw0KGgoAAA..."}}
+```
+
+---
+
+#### 响应示例：查验完成但信息不一致
+
+```http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+
+data: {"step": "parse"}
+
+data: {"step": "parse", "status": true, "data": {"invoice_title": "电子发票（增值税普通发票）", "invoice_code": "", "invoice_number": "26319166100014538083", "issue_date": "2026-10-31", "amount_ex_tax": 626.0, "tax_amount": 0.0, "total_amount": 626.0, "check_code": "", "buyer_name": "北京科技有限公司", "buyer_tax_id": "", "seller_name": "上海商贸有限公司", "seller_tax_id": "", "items": [], "total_words": "", "remarks": "", "issuer": ""}}
+
+data: {"step": "open_browser"}
+
+data: {"step": "open_browser", "status": true}
+
+data: {"step": "fill_form"}
+
+data: {"step": "fill_form", "status": true}
+
+data: {"step": "captcha"}
+
+data: {"step": "captcha", "status": true}
+
+data: {"step": "fetch_result"}
+
+data: {"step": "fetch_result", "status": true}
+
+data: {"step": "done", "status": true, "data": {"verification_status": "inconsistent", "screenshot": "data:image/png;base64,iVBORw0KGgoAAA..."}}
 ```
 
 ---

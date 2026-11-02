@@ -10,6 +10,6 @@ ddddocr
 easyofd
 tencentcloud-sdk-python
 
-# 可选：二维码扫描（安装后自动启用，可跳过 VLM 识别以节省 token）
+# Optional: QR code decoding (pyzbar, opencv-python-headless)
 # pyzbar
 # opencv-python-headless

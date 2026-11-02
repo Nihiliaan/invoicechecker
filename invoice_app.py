@@ -39,6 +39,8 @@ except ImportError:
 load_dotenv(Path(__file__).parent / ".env")
 
 app = Flask(__name__, static_folder='static', static_url_path='')
+app.config['MAX_CONTENT_LENGTH'] = 30 * 1024 * 1024  # 30MB limit
+
 
 # ==================== 配置区域（从 .env 读取）====================
 OCR_PROVIDER = os.getenv("OCR_PROVIDER", "tencent").strip().lower()
@@ -2223,15 +2225,28 @@ async def verify_invoice_stream(api_key: str, invoice_path: str, screenshot_path
                             await asyncio.sleep(3)
                             continue
 
-                        res_found = await page.evaluate('''() => {
-                            const d = document.querySelector('dialog, .popup-container, #content');
-                            const hasTable = !!document.querySelector('table, .invoice-detail, .t-table');
+                        res_info = await page.evaluate('''() => {
                             const body = document.body.innerText || '';
-                            const successKeyword = body.includes('查验结果') || body.includes('发票详情') || body.includes('货物或应税劳务') || body.includes('最多查验') || body.includes('不一致') || body.includes('查无此票');
-                            return (d && window.getComputedStyle(d).display !== 'none') || hasTable || successKeyword;
+                            const hasTable = !!document.querySelector('table, .invoice-detail, .t-table');
+                            const d = document.querySelector('dialog, .popup-container, #content');
+                            const hasDialog = d && window.getComputedStyle(d).display !== 'none';
+                            const isFinished = hasDialog || hasTable || body.includes('查验结果') || body.includes('发票详情') || body.includes('货物或应税劳务') || body.includes('最多查验') || body.includes('不一致') || body.includes('查无此票') || body.includes('超过');
+                            if (!isFinished) return null;
+
+                            let status = 'unknown';
+                            if (body.includes('不一致')) {
+                                status = 'inconsistent';
+                            } else if (body.includes('查无此票')) {
+                                status = 'not_found';
+                            } else if (body.includes('最多查验') || (body.includes('超过') && body.includes('次数'))) {
+                                status = 'over_limit';
+                            } else if (hasTable || body.includes('发票详情') || body.includes('货物或应税劳务') || (body.includes('查验结果') && !body.includes('不一致') && !body.includes('查无此票'))) {
+                                status = 'valid';
+                            }
+                            return { finished: true, verification_status: status };
                         }''')
 
-                        if res_found:
+                        if res_info:
                             yield make_step_event(step="captcha", status=True)
                             yield make_step_event(step="fetch_result")
                             await page.wait_for_timeout(1000)
@@ -2239,6 +2254,7 @@ async def verify_invoice_stream(api_key: str, invoice_path: str, screenshot_path
                             with open(scr_path, "rb") as f:
                                 b64_result = base64.b64encode(f.read()).decode("utf-8")
                             yield make_step_event(step="fetch_result", status=True)
+                            v_status_result = res_info.get("verification_status", "unknown")
                             success = True
                             break
                         else:
@@ -2249,26 +2265,41 @@ async def verify_invoice_stream(api_key: str, invoice_path: str, screenshot_path
                         yield make_step_event(step="captcha", status=False)
 
                     await page.close()
-                    yield ("VERIFY_SUMMARY", success, b64_result)
+                    yield ("VERIFY_SUMMARY", success, b64_result, v_status_result if success else "unknown")
 
                 except Exception as e:
                     print(f"[_do_one_verify Error] {e}")
                     await page.close()
-                    yield ("VERIFY_SUMMARY", False, None)
+                    yield ("VERIFY_SUMMARY", False, None, "unknown")
 
             # 单页
             if not is_multipage:
                 success = False
                 b64 = None
+                v_status = "unknown"
                 async for chunk in _do_one_verify(inv_info, screenshot_path):
                     if isinstance(chunk, tuple) and chunk[0] == "VERIFY_SUMMARY":
-                        _, success, b64 = chunk
+                        _, success, b64, v_status = chunk
                     else:
                         yield chunk
                 if success and b64:
-                    yield make_step_event(step="done", status=True, data=f"data:image/png;base64,{b64}")
+                    yield make_step_event(
+                        step="done",
+                        status=True,
+                        data={
+                            "verification_status": v_status,
+                            "screenshot": f"data:image/png;base64,{b64}"
+                        }
+                    )
                 else:
-                    yield make_step_event(step="done", status=False, data=None)
+                    yield make_step_event(
+                        step="done",
+                        status=False,
+                        data={
+                            "verification_status": "unknown",
+                            "screenshot": None
+                        }
+                    )
             # 多页
             else:
                 success_count = 0
@@ -2277,16 +2308,29 @@ async def verify_invoice_stream(api_key: str, invoice_path: str, screenshot_path
                     scr_path = screenshot_path.replace(".png", f"_{i+1}.png")
                     page_success = False
                     page_b64 = None
+                    page_v_status = "unknown"
                     async for chunk in _do_one_verify(info, scr_path):
                         if isinstance(chunk, tuple) and chunk[0] == "VERIFY_SUMMARY":
-                            _, page_success, page_b64 = chunk
+                            _, page_success, page_b64, page_v_status = chunk
                         else:
                             yield chunk
                     if page_success:
                         success_count += 1
-                        yield make_step_event(step="page_done", status=True, data={"page": i + 1, "total": page_count, "label": label, "screenshot": f"data:image/png;base64,{page_b64}"})
+                        yield make_step_event(step="page_done", status=True, data={
+                            "page": i + 1,
+                            "total": page_count,
+                            "label": label,
+                            "verification_status": page_v_status,
+                            "screenshot": f"data:image/png;base64,{page_b64}"
+                        })
                     else:
-                        yield make_step_event(step="page_done", status=False, data={"page": i + 1, "total": page_count, "label": label, "screenshot": None})
+                        yield make_step_event(step="page_done", status=False, data={
+                            "page": i + 1,
+                            "total": page_count,
+                            "label": label,
+                            "verification_status": "unknown",
+                            "screenshot": None
+                        })
 
                 yield make_step_event(step="done", status=(success_count > 0), data=None)
 
@@ -2312,8 +2356,10 @@ def verify():
     if not file:
         return {"error": "未上传文件"}, 400
 
+    ext = os.path.splitext(file.filename)[1].lower() if file.filename else ".pdf"
+    safe_filename = f"{uuid.uuid4().hex}{ext}"
     tmp_dir = tempfile.mkdtemp(prefix="inv_upload_")
-    invoice_path    = os.path.join(tmp_dir, file.filename)
+    invoice_path    = os.path.join(tmp_dir, safe_filename)
     screenshot_path = os.path.join(tmp_dir, "result.png")
     file.save(invoice_path)
 
@@ -2364,12 +2410,15 @@ def recognize():
 
     tmp_dir = tempfile.mkdtemp(prefix="inv_rec_batch_")
 
-    # 先把所有文件保存到临时目录
+    # 先把所有文件以安全文件名保存到临时目录（防路径穿越）
     saved = []
     for f in files:
-        save_path = os.path.join(tmp_dir, f.filename)
+        ext = os.path.splitext(f.filename)[1].lower() if f.filename else ".pdf"
+        safe_filename = f"{uuid.uuid4().hex}{ext}"
+        save_path = os.path.join(tmp_dir, safe_filename)
         f.save(save_path)
-        saved.append((save_path, f.filename))
+        original_name = os.path.basename(f.filename) if f.filename else safe_filename
+        saved.append((save_path, original_name))
 
     def _process_one(args):
         save_path, filename = args
