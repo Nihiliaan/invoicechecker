@@ -19,6 +19,7 @@ import base64
 import tempfile
 import shutil
 import zipfile
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from flask import Flask, request, Response, send_from_directory, jsonify
