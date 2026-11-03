@@ -77,7 +77,7 @@ flowchart TD
 | :--- | :--- | :--- |
 | **后端服务** | Python 3.10+ / Flask | Web 服务与 SSE 流式传输 |
 | **浏览器自动化** | Playwright (Python) | Headless Chromium 自动化查验 |
-| **视觉模型** | 智谱 GLM-4V-Flash / Qwen-VL | 票面字段提取与验证码识别 |
+| **视觉模型** | 兼容 OpenAI 协议 (Ollama / vLLM 私有端点) 或智谱 / 阿里 | 票面字段提取与验证码识别 (支持纯离线/本地端口) |
 | **图像处理** | OpenCV / NumPy | HSV 颜色空间过滤与图像预处理 |
 | **文档处理** | PyMuPDF (fitz) / easyofd | PDF 文本提取与 OFD 页面转换 |
 | **数据处理** | Pandas / OpenPyXL | 发票数据归档与 Excel 导出 |
@@ -132,11 +132,19 @@ cp .env.example .env
 编辑 `.env` 文件，配置识别引擎与浏览器参数：
 
 ```ini
-# 识别引擎选择 (可选: zhipu / aliyun / tencent)
-OCR_PROVIDER=zhipu
+# 识别引擎选择 (可选: openai / zhipu / aliyun / tencent)
+OCR_PROVIDER=openai
 
-# 智谱开放平台 API Key (https://bigmodel.cn/)
-ZHIPU_API_KEY=your_zhipu_api_key_here
+# 隐私保护：设为 true 则严禁任何发票数据外发，仅本地二维码/正则提取
+OFFLINE_ONLY=false
+
+# 私有化/本地部署示例 (如 Ollama / vLLM，完全避免发票数据外发):
+OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+OPENAI_API_KEY=ollama
+OPENAI_MODEL=qwen2.5-vl:7b
+
+# 或使用智谱开放平台 (需设置 OCR_PROVIDER=zhipu):
+# ZHIPU_API_KEY=your_zhipu_api_key_here
 
 # 浏览器配置
 HEADLESS=true
