@@ -8,6 +8,10 @@
 
 - **官方查验核验**：通过 Playwright 连接全国增值税发票查验平台，自动填写发票要素并获取查验结果截图。
 - **验证码识别**：通过 HSV 颜色空间提取目标颜色文字图层，并结合多模态视觉模型进行比对识别，支持自动重试。
+- **安全沙箱保护**：默认启用 Chromium 原生安全沙箱机制，兼顾安全性与非 root 用户容器/宿主机兼容性。
+- **数据隐私与私有化支持**：
+  - 支持配置本地或局域网私有模型端口（如 Ollama、vLLM 等），发票数据与图片完全在本地处理，避免数据外发；
+  - 提供 `OFFLINE_ONLY=true` 严格离线保护模式，开启后底层自动拦截所有外部视觉模型请求，仅依靠本地正则与二维码解析。
 - **票种支持**：已支持增值税专用发票、增值税普通发票、全电发票（数电票）、红字负数发票及铁路电子客票。
   - **增值税专票/普票**：标准四要素提取与校验。
   - **全电发票（数电票）**：自动提取 20 位发票号码与价税合计金额。
@@ -15,7 +19,7 @@
   - **铁路电子客票**：支持车次、日期与票价信息提取。
   - **多格式支持**：支持 PDF（含单文件多页）、OFD、XML 及常见图片格式。
 - **流式进度回传**：采用 Server-Sent Events (SSE) 协议实时传输查验步骤与状态。
-- **多模型支持**：默认支持智谱 GLM-4V-Flash 模型，亦可配置阿里百炼 (Qwen-VL)、腾讯云 OCR 等接口。
+- **多模型支持**：支持标准 OpenAI 兼容协议（包含私有本地端点）、智谱 GLM、阿里百炼 (Qwen-VL) 与腾讯云 OCR。
 
 ---
 
@@ -26,6 +30,34 @@
 
 ### 2. 发票识别与整理页面
 ![发票识别整理](发票识别整理.png)
+
+---
+
+## 项目架构与目录结构
+
+系统已解耦为高内聚、低耦合的模块化分层架构：
+
+```text
+invoicechecker/
+├── app.py                  # Flask 主应用入口、文件上传安全校验与 Web API 路由
+├── config.py               # 环境配置、私有端口识别、Chromium 沙箱与离线保护
+├── parsers/                # 发票结构化解析模块
+│   ├── qr_parser.py        # 二维码解码（增值税专普票、数电票）
+│   ├── regex_parser.py     # PDF 文本层零 Token 提取与金额/日期清洗
+│   ├── train_parser.py     # 铁路电子客票解析
+│   ├── xml_parser.py       # 数电票 XML/OFD 结构化解析
+│   ├── vlm_parser.py       # 多模态 VLM / 本地私有模型适配器（带隐私拦截）
+│   └── dispatcher.py       # 多格式统一调度与全要素汇总
+├── services/               # 核心业务服务模块
+│   ├── captcha.py          # 验证码 HSV 目标颜色过滤与双图识别
+│   └── verifier.py         # Playwright 国税查验自动化与结果截屏
+├── utils/                  # 通用工具模块
+│   ├── sse.py              # SSE 纯英文步骤与状态流式帧封装
+│   └── excel.py            # 发票台账 Excel 导出
+├── static/                 # 前端 Web 界面静态资源
+├── tests/                  # 自动化单元测试套件
+└── invoice_app.py          # 向后兼容代理入口（确保旧脚本与服务平滑兼容）
+```
 
 ---
 
@@ -76,7 +108,7 @@ flowchart TD
 | 模块 | 技术选型 | 说明 |
 | :--- | :--- | :--- |
 | **后端服务** | Python 3.10+ / Flask | Web 服务与 SSE 流式传输 |
-| **浏览器自动化** | Playwright (Python) | Headless Chromium 自动化查验 |
+| **浏览器自动化** | Playwright (Python) | Headless Chromium 自动化查验（原生沙箱保护） |
 | **视觉模型** | 兼容 OpenAI 协议 (Ollama / vLLM 私有端点) 或智谱 / 阿里 | 票面字段提取与验证码识别 (支持纯离线/本地端口) |
 | **图像处理** | OpenCV / NumPy | HSV 颜色空间过滤与图像预处理 |
 | **文档处理** | PyMuPDF (fitz) / easyofd | PDF 文本提取与 OFD 页面转换 |
@@ -138,7 +170,7 @@ OCR_PROVIDER=openai
 # 隐私保护：设为 true 则严禁任何发票数据外发，仅本地二维码/正则提取
 OFFLINE_ONLY=false
 
-# 私有化/本地部署示例 (如 Ollama / vLLM，完全避免发票数据外发):
+# 私有化/本地模型端点配置示例 (如 Ollama / vLLM，完全避免发票数据外发):
 OPENAI_BASE_URL=http://127.0.0.1:11434/v1
 OPENAI_API_KEY=ollama
 OPENAI_MODEL=qwen2.5-vl:7b
@@ -148,17 +180,10 @@ OPENAI_MODEL=qwen2.5-vl:7b
 
 # 浏览器配置
 HEADLESS=true
+# Chromium 安全沙箱（默认开启，设为 true 时强制禁用沙箱）
+CHROMIUM_NO_SANDBOX=false
 # Chromium 可执行文件路径（留空则自动检测）
 CHROMIUM_EXECUTABLE_PATH=/snap/bin/chromium
-
-# 可选：阿里云百炼配置
-ALIBABA_API_KEY=your_alibaba_key
-VLM_MODEL=qwen3-vl-flash
-
-# 可选：腾讯云 OCR 配置
-TENCENTCLOUD_SECRET_ID=your_secret_id
-TENCENTCLOUD_SECRET_KEY=your_secret_key
-TENCENTCLOUD_REGION=ap-guangzhou
 ```
 
 ---
@@ -166,6 +191,10 @@ TENCENTCLOUD_REGION=ap-guangzhou
 ### 4. 运行服务
 
 ```bash
+# 推荐使用模块化入口运行
+python app.py
+
+# 或使用兼容入口运行
 python invoice_app.py
 ```
 
@@ -189,7 +218,7 @@ User=app
 Group=app
 WorkingDirectory=/opt/invoicechecker
 Environment="PATH=/opt/invoicechecker/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/opt/invoicechecker/venv/bin/python3 invoice_app.py
+ExecStart=/opt/invoicechecker/venv/bin/python3 app.py
 Restart=always
 RestartSec=3
 
@@ -311,35 +340,6 @@ data: {"step": "done", "status": false, "data": null}
 
 ---
 
-#### 响应示例：查验失败（如验证码超限）
-
-```http
-HTTP/1.1 200 OK
-Content-Type: text/event-stream
-Cache-Control: no-cache
-Connection: keep-alive
-
-data: {"step": "parse"}
-
-data: {"step": "parse", "status": true, "data": {"invoice_title": "电子发票（增值税普通发票）", "invoice_code": "", "invoice_number": "26319166100014538083", "issue_date": "2026-10-31", "amount_ex_tax": 626.0, "tax_amount": 0.0, "total_amount": 626.0, "check_code": "", "buyer_name": "北京科技有限公司", "buyer_tax_id": "", "seller_name": "上海商贸有限公司", "seller_tax_id": "", "items": [], "total_words": "", "remarks": "", "issuer": ""}}
-
-data: {"step": "open_browser"}
-
-data: {"step": "open_browser", "status": true}
-
-data: {"step": "fill_form"}
-
-data: {"step": "fill_form", "status": true}
-
-data: {"step": "captcha"}
-
-data: {"step": "captcha", "status": false}
-
-data: {"step": "done", "status": false, "data": null}
-```
-
----
-
 ### 2. 批量发票识别接口
 - **路径**：`POST /api/recognize`
 - **请求类型**：`multipart/form-data`
@@ -355,7 +355,7 @@ data: {"step": "done", "status": false, "data": null}
 
 ## 自动化测试 (Tests)
 
-本项目内置针对 SSE 数据流传输协议、发票二维码解析、日期金额规范化、红字负数发票与全电发票提取清洗的单元测试套件：
+本项目内置针对 SSE 数据流传输协议、私有模型端点与离线隐私保护、Chromium 沙箱参数、发票二维码解析、日期金额规范化、红字负数发票与全电发票提取清洗的完整单元测试套件（共 16 项确定性断言）：
 
 ```bash
 # 执行全部单元测试
